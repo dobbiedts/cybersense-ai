@@ -1,0 +1,80 @@
+version: '3.8'
+
+services:
+  nginx-modsecurity:
+    image: owasp/modsecurity-crs:3.3.5-nginx-202308071108
+    container_name: nginx-modsecurity
+    restart: unless-stopped
+    ports:
+      - "80:80"
+    environment:
+      - BACKEND=http://xss-api:5000
+      - PROXY=1
+    volumes:
+      - ./nginx/nginx.conf:/etc/nginx/templates/nginx.conf.template:ro
+      - ./modsecurity/modsecurity-override.conf:/etc/nginx/templates/modsecurity.d/modsecurity-override.conf.template:ro
+    depends_on:
+      xss-api:
+        condition: service_healthy
+      sql-api:
+        condition: service_healthy
+    networks:
+      - security-net
+
+  xss-api:
+    build:
+      context: .
+      dockerfile: project-a/xss-api/Dockerfile
+    container_name: xss-api
+    ports:
+      - "5000:5000"
+    volumes:
+      - event-data:/data
+    healthcheck:
+      test: ["CMD-SHELL", "curl -f http://localhost:5000/health || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+    networks:
+      - security-net
+
+  sql-api:
+    build:
+      context: .
+      dockerfile: project-a/sql-api/Dockerfile
+    container_name: sql-api
+    ports:
+      - "5001:5000"
+    volumes:
+      - event-data:/data
+    healthcheck:
+      test: ["CMD-SHELL", "curl -f http://localhost:5000/health || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+    networks:
+      - security-net
+
+  bridge:
+    build:
+      context: .
+      dockerfile: bridge/Dockerfile
+    container_name: bridge
+    ports:
+      - "5003:5003"
+    volumes:
+      - event-data:/data
+    depends_on:
+      sql-api:
+        condition: service_healthy
+      xss-api:
+        condition: service_healthy
+    networks:
+      - security-net
+
+networks:
+  security-net:
+    driver: bridge
+
+volumes:
+  event-data:

@@ -1,0 +1,14 @@
+http:
+  servers:
+    default:
+      listen: ":8080"
+      lua:
+        directories:
+          - /etc/coraza/lua  # Path to mounted Lua scripts
+      rules:
+        # Your rules here
+        - id: 1002
+          phase: request
+          operator: lua
+          action: script
+          action_data: custom.lua  # Your Lua script

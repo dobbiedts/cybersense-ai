@@ -1,0 +1,40 @@
+﻿# CyberSense AI gitignore
+
+# Python
+__pycache__/
+*.pyc
+.mypy_cache/
+.venv/
+venv/
+
+# Secrets
+.env
+*.env
+
+# Runtime data
+*.db
+*.sqlite3
+*.log
+
+# Editor and OS files
+.vscode/
+.idea/
+Thumbs.db
+.DS_Store
+
+# Models: ignore everything, then allow only what the APIs load
+models/*
+!models/RandomForest (1).pkl
+!models/sqlvectorizer (2).pkl
+!models/bilstm_model.h5
+!models/bilstm_preprocessor.pkl
+!models/random_forest.pkl
+!models/xssvectorizer.pkl
+!models/dnn_preprocessor.pkl
+!models/attention_model.h5
+
+# ModSecurity: keep only our config, the CRS ships inside the Docker image
+modsecurity/*
+!modsecurity/modsecurity.conf
+!modsecurity/modsecurity-override.conf
+mounts.json
