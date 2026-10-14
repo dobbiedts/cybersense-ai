@@ -22,9 +22,9 @@ csv.field_size_limit(2**31 - 1)
 TEXT_COLUMNS = ["Sentence", "Query", "Payload", "payload", "sentence", "query"]
 LABEL_COLUMNS = ["Label", "label"]
 
-# DL thresholds to sweep: 0.5 is the default; 0.403 and 0.357 are the
-# effective thresholds the feedback loop produced (boost 1.241 and 1.4).
-THRESHOLDS = [0.5, 0.45, 0.403, 0.357, 0.3, 0.25]
+# Feedback loop sensitivity boosts. Effective threshold = 0.5 / boost.
+# 1.241 and 1.4 are the boosts the loop has produced so far; 1.5 is the cap.
+BOOSTS = [1.0, 1.1, 1.241, 1.4, 1.5, 2.0]
 
 
 # ---------------------------------------------------------------- data
@@ -85,12 +85,15 @@ def load_predictors(attack):
         padding = api.dnn_preprocessor.get("padding", padding)
         truncating = api.dnn_preprocessor.get("truncating", truncating)
 
+    attack_col = list(ml_model.classes_).index(1)
+
     def ml_predict(texts, batch=2000):
+        """Random Forest probability of 'attack' (share of trees voting attack)."""
         out = []
         for i in range(0, len(texts), batch):
             X = vectorizer.transform(texts[i:i + batch]).toarray()
-            out.append(ml_model.predict(X))
-        return np.concatenate(out).astype(int)
+            out.append(ml_model.predict_proba(X)[:, attack_col])
+        return np.concatenate(out)
 
     def dl_scores(texts):
         seqs = tokenizer.texts_to_sequences(texts)
@@ -128,7 +131,8 @@ def print_table(title, rows):
               f"{m['f1']:>8.4f}{m['fpr']:>8.4f}{m['fp']:>7}{m['fn']:>7}")
 
 
-def evaluate(name, y, ml_pred, dl_score):
+def evaluate(name, y, ml_score, dl_score):
+    ml_pred = (ml_score > 0.5).astype(int)
     dl_pred = (dl_score > 0.5).astype(int)
     detection = [
         ("ML only (Random Forest)", metrics(y, ml_pred)),
@@ -138,18 +142,23 @@ def evaluate(name, y, ml_pred, dl_score):
     ]
     print_table(f"=== {name}: detection performance ===", detection)
 
-    sweep = []
-    for t in THRESHOLDS:
-        combined = ((ml_pred == 1) | (dl_score > t)).astype(int)
-        sweep.append((f"OR, DL threshold {t}", metrics(y, combined)))
-    print_table(f"=== {name}: feedback loop threshold sweep ===", sweep)
+    dl_sweep, both_sweep = [], []
+    for b in BOOSTS:
+        t = 0.5 / b
+        dl_only = ((ml_score > 0.5) | (dl_score > t)).astype(int)
+        both = ((ml_score > t) | (dl_score > t)).astype(int)
+        dl_sweep.append((f"boost {b} (t={t:.3f})", metrics(y, dl_only)))
+        both_sweep.append((f"boost {b} (t={t:.3f})", metrics(y, both)))
+    print_table(f"=== {name}: feedback loop, DL threshold only (current design) ===", dl_sweep)
+    print_table(f"=== {name}: feedback loop, RF + DL thresholds (proposed) ===", both_sweep)
 
     return {
         "rows": int(len(y)),
         "attacks": int(y.sum()),
         "benign": int(len(y) - y.sum()),
         "detection": dict(detection),
-        "threshold_sweep": {t: m for t, (_, m) in zip(THRESHOLDS, sweep)},
+        "feedback_dl_only": {b: m for b, (_, m) in zip(BOOSTS, dl_sweep)},
+        "feedback_rf_and_dl": {b: m for b, (_, m) in zip(BOOSTS, both_sweep)},
     }
 
 
@@ -167,7 +176,7 @@ def main():
     ml_predict, dl_scores = load_predictors(args.attack)
 
     start = time.time()
-    ml_pred = ml_predict(texts)
+    ml_score = ml_predict(texts)
     dl_score = dl_scores(texts)
     elapsed = time.time() - start
     print(f"\nScored {len(texts)} payloads in {elapsed:.1f}s "
@@ -176,20 +185,20 @@ def main():
     results = {
         "attack": args.attack,
         "dataset": args.data,
-        "full_dataset": evaluate("FULL DATASET (includes training rows)", y, ml_pred, dl_score),
+        "full_dataset": evaluate("FULL DATASET (includes training rows)", y, ml_score, dl_score),
     }
 
     hold = split_test_indices(len(y), args.test_size, args.seed)
     results["test_split"] = evaluate(
         f"TEST SPLIT (test_size={args.test_size}, random_state={args.seed})",
-        y[hold], ml_pred[hold], dl_score[hold],
+        y[hold], ml_score[hold], dl_score[hold],
     )
 
     misses = [
         {"payload": texts[i][:300], "label": int(y[i]),
-         "ml": int(ml_pred[i]), "dl_score": round(float(dl_score[i]), 4)}
+         "ml_score": round(float(ml_score[i]), 4), "dl_score": round(float(dl_score[i]), 4)}
         for i in range(len(y))
-        if int((ml_pred[i] == 1) or (dl_score[i] > 0.5)) != y[i]
+        if int((ml_score[i] > 0.5) or (dl_score[i] > 0.5)) != y[i]
     ]
     results["misclassified_sample"] = misses[:200]
     results["misclassified_total"] = len(misses)
