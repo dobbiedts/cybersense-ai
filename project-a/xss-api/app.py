@@ -107,8 +107,8 @@ models_dir = '/models'
 
 ml_model_path         = os.path.join(models_dir, 'random_forest.pkl')
 tfidf_vectorizer_path = os.path.join(models_dir, 'xssvectorizer.pkl')
-dnn_preprocessor_path = os.path.join(models_dir, 'dnn_preprocessor.pkl')
-attention_model_path  = os.path.join(models_dir, 'attention_model.h5')
+dnn_preprocessor_path = os.path.join(models_dir, 'xss_char_preprocessor.pkl')
+attention_model_path  = os.path.join(models_dir, 'xss_char_model.keras')
 
 ml_model         = joblib.load(ml_model_path)
 tfidf_vectorizer = joblib.load(tfidf_vectorizer_path)
@@ -131,7 +131,12 @@ def predict():
     tokenizer = dnn_preprocessor['tokenizer']
     max_len   = dnn_preprocessor['max_len']
     sequence  = tokenizer.texts_to_sequences([payload])
-    padded_sequence = pad_sequences(sequence, maxlen=max_len, padding='post')
+    padded_sequence = pad_sequences(
+        sequence,
+        maxlen=max_len,
+        padding=dnn_preprocessor.get('padding', 'post'),
+        truncating=dnn_preprocessor.get('truncating', 'pre'),
+    )
     dl_prediction   = dnn_model.predict(padded_sequence)[0][0]
 
     threshold = detection_config["threshold"] / detection_config["sensitivity_boost"]

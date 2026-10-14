@@ -38,3 +38,13 @@ modsecurity/*
 !modsecurity/modsecurity.conf
 !modsecurity/modsecurity-override.conf
 mounts.json
+
+# Datasets and evaluation outputs
+datasets/
+evaluation/results/
+
+# Datasets and evaluation outputs
+datasets/
+evaluation/results/
+!models/xss_char_model.keras
+!models/xss_char_preprocessor.pkl
