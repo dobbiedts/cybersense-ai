@@ -1,5 +1,3 @@
-version: '3.8'
-
 services:
   nginx-modsecurity:
     image: owasp/modsecurity-crs:3.3.5-nginx-202308071108
@@ -55,6 +53,21 @@ services:
     networks:
       - security-net
 
+  compliance-engine:
+    build:
+      context: .
+      dockerfile: compliance-engine/Dockerfile
+    container_name: compliance-engine
+    ports:
+      - "5002:5002"
+    healthcheck:
+      test: ["CMD-SHELL", "curl -f http://localhost:5002/health || exit 1"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+    networks:
+      - security-net
+
   bridge:
     build:
       context: .
@@ -68,6 +81,8 @@ services:
       sql-api:
         condition: service_healthy
       xss-api:
+        condition: service_healthy
+      compliance-engine:
         condition: service_healthy
     networks:
       - security-net
