@@ -1,20 +1,58 @@
 services:
+  demo-app:
+    build:
+      context: .
+      dockerfile: demo-app/Dockerfile
+    container_name: demo-app
+    healthcheck:
+      test: ["CMD-SHELL", "curl -f http://localhost:8000/health || exit 1"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+    networks:
+      - security-net
+
+  ai-gate:
+    build:
+      context: .
+      dockerfile: ai-gate/Dockerfile
+    container_name: ai-gate
+    ports:
+      - "8081:8000"
+    environment:
+      - APP_URL=http://demo-app:8000
+      - SQLI_URL=http://sql-api:5000/predict_sql
+      - XSS_URL=http://xss-api:5000/predict
+      - GATE_FAIL_MODE=closed
+    healthcheck:
+      test: ["CMD-SHELL", "curl -f http://localhost:8000/gate/health || exit 1"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+    depends_on:
+      demo-app:
+        condition: service_healthy
+      sql-api:
+        condition: service_healthy
+      xss-api:
+        condition: service_healthy
+    networks:
+      - security-net
+
   nginx-modsecurity:
     image: owasp/modsecurity-crs:3.3.5-nginx-202308071108
     container_name: nginx-modsecurity
     restart: unless-stopped
     ports:
-      - "80:80"
+      - "8080:8080"
     environment:
-      - BACKEND=http://xss-api:5000
+      - PORT=8080
+      - BACKEND=http://ai-gate:8000
       - PROXY=1
-    volumes:
-      - ./nginx/nginx.conf:/etc/nginx/templates/nginx.conf.template:ro
-      - ./modsecurity/modsecurity-override.conf:/etc/nginx/templates/modsecurity.d/modsecurity-override.conf.template:ro
+      - MODSEC_RULE_ENGINE=On
+      - PARANOIA=1
     depends_on:
-      xss-api:
-        condition: service_healthy
-      sql-api:
+      ai-gate:
         condition: service_healthy
     networks:
       - security-net

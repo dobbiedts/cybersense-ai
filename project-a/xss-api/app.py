@@ -183,8 +183,8 @@ models_dir = '/models'
 
 ml_model_path         = os.path.join(models_dir, 'random_forest.pkl')
 tfidf_vectorizer_path = os.path.join(models_dir, 'xssvectorizer.pkl')
-dnn_preprocessor_path = os.path.join(models_dir, 'xss_char_preprocessor.pkl')
-attention_model_path  = os.path.join(models_dir, 'xss_char_model.keras')
+dnn_preprocessor_path = os.path.join(models_dir, 'xss_char_preprocessor_v2.pkl')
+attention_model_path  = os.path.join(models_dir, 'xss_char_model_v2.keras')
 
 ml_model         = joblib.load(ml_model_path)
 tfidf_vectorizer = joblib.load(tfidf_vectorizer_path)

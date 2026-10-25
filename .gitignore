@@ -48,3 +48,5 @@ datasets/
 evaluation/results/
 !models/xss_char_model.keras
 !models/xss_char_preprocessor.pkl
+!models/xss_char_model_v2.keras
+!models/xss_char_preprocessor_v2.pkl
