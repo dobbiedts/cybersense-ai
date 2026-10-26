@@ -50,3 +50,8 @@ evaluation/results/
 !models/xss_char_preprocessor.pkl
 !models/xss_char_model_v2.keras
 !models/xss_char_preprocessor_v2.pkl
+!models/sqli_rf_v2.pkl
+!models/sqli_vectorizer_v2.pkl
+!models/sqli_bilstm_v2.h5
+!models/sqli_bilstm_preprocessor_v2.pkl
+!models/sqli_bilstm_v2.keras

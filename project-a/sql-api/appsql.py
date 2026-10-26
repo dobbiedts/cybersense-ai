@@ -56,6 +56,10 @@ SEVERITY_LEVELS = ["low", "medium", "high", "critical"]
 # Set by the bridge from Cyber Essentials gap scores
 risk_config = {"risk_level": "normal", "severity_escalation": 0, "watch_threshold": None}
 
+ATTACK_TYPE = "sqli"
+# Shared secret for /record (internal callers only, e.g. the AI gate)
+RECORD_TOKEN = os.environ.get("RECORD_TOKEN", "")
+
 @app.route('/config/risk', methods=['POST'])
 def update_risk():
     data = request.get_json(silent=True) or {}
@@ -125,8 +129,12 @@ def log_watchlist(attack_type, ml_score, dl_score, payload):
     conn.commit()
     conn.close()
 
-def respond(attack_type, payload, ml_score, dl_score):
-    """Fixed-threshold detection plus risk-adaptive response."""
+def respond(attack_type, payload, ml_score, dl_score, log=True):
+    """
+    Fixed-threshold detection plus risk-adaptive response.
+    log=False returns the verdict without recording it, so a caller that checks
+    both APIs (the AI gate) can decide the attack type first and then call /record.
+    """
     ml_score, dl_score = float(ml_score), float(dl_score)
     is_threat = ml_score > DETECTION_THRESHOLD or dl_score > DETECTION_THRESHOLD
 
@@ -139,16 +147,33 @@ def respond(attack_type, payload, ml_score, dl_score):
 
     if is_threat:
         severity = escalate(base_severity(ml_score, dl_score))
-        log_event(attack_type, ml_score, dl_score, payload, severity)
+        if log:
+            log_event(attack_type, ml_score, dl_score, payload, severity)
         result["severity"] = severity
     else:
         watch = risk_config["watch_threshold"]
         watchlisted = watch is not None and max(ml_score, dl_score) > watch
-        if watchlisted:
+        if watchlisted and log:
             log_watchlist(attack_type, ml_score, dl_score, payload)
         result["watchlisted"] = bool(watchlisted)
 
     return jsonify(result)
+
+@app.route('/record', methods=['POST'])
+def record():
+    """Record a verdict the caller already obtained from /predict with log=false."""
+    if RECORD_TOKEN and request.headers.get("X-Record-Token") != RECORD_TOKEN:
+        return jsonify({"error": "unauthorised"}), 401
+    data = request.get_json(silent=True) or {}
+    payload = str(data.get("payload", ""))
+    ml_score = float(data.get("ml_score", 0))
+    dl_score = float(data.get("dl_score", 0))
+    if data.get("kind") == "watch":
+        log_watchlist(ATTACK_TYPE, ml_score, dl_score, payload)
+        return jsonify({"recorded": "watch"}), 200
+    severity = escalate(base_severity(ml_score, dl_score))
+    log_event(ATTACK_TYPE, ml_score, dl_score, payload, severity)
+    return jsonify({"recorded": "threat", "severity": severity}), 200
 
 # --- Health check ---
 @app.route('/health', methods=['GET'])
@@ -160,8 +185,8 @@ models_dir = '/models'
 
 rf_model_path            = os.path.join(models_dir, 'RandomForest (1).pkl')
 rf_vectorizer_path       = os.path.join(models_dir, 'sqlvectorizer (2).pkl')
-bilstm_model_path        = os.path.join(models_dir, 'bilstm_model.h5')
-bilstm_preprocessor_path = os.path.join(models_dir, 'bilstm_preprocessor.pkl')
+bilstm_model_path        = os.path.join(models_dir, 'sqli_bilstm_v2.keras')
+bilstm_preprocessor_path = os.path.join(models_dir, 'sqli_bilstm_preprocessor_v2.pkl')
 
 RF_model      = joblib.load(rf_model_path)
 RF_vectorizer = joblib.load(rf_vectorizer_path)
@@ -189,7 +214,7 @@ def predict_sql():
     padded_seq = pad_sequences(sequence, maxlen=max_len, padding='post')
     dl_score   = bilstm_model.predict(padded_seq, verbose=0)[0][0]
 
-    return respond('sqli', payload, ml_score, dl_score)
+    return respond(ATTACK_TYPE, payload, ml_score, dl_score, log=data.get('log', True) is not False)
 
 if __name__ == '__main__':
     app.run(host='0.0.0.0', port=5000)
