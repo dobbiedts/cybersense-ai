@@ -129,7 +129,25 @@ def detection_breakdown(events, rule_counts):
     return "\n".join(lines)
 
 
+
 # --- Build evidence document ---
+def boundary_line(label, events):
+    """CE1 wording based on which layer stopped the attempts."""
+    n = len(events)
+    waf = sum(1 for e in events if is_waf(e))
+    ai = n - waf
+    if ai == 0:
+        return (f"- CE Control 1 (Boundary Firewalls): all {n} {label} attempts were blocked\n"
+                f"  by WAF signature rules at the boundary. Boundary filtering is effective. PASS.")
+    if waf == 0:
+        return (f"- CE Control 1 (Boundary Firewalls): none of the {n} {label} attempts were\n"
+                f"  stopped by WAF signature rules; all {ai} were caught by the AI models.\n"
+                f"  Signature filtering at the boundary is not stopping this attack type. FAIL.")
+    return (f"- CE Control 1 (Boundary Firewalls): {waf} of {n} {label} attempts were blocked by\n"
+            f"  WAF signature rules; {ai} were caught by the AI models instead. The boundary\n"
+            f"  relies on the AI layer for part of this traffic. WARN.")
+
+
 def build_evidence_document(events):
     sqli = [e for e in events if e['attack_type'] == 'sqli']
     xss  = [e for e in events if e['attack_type'] == 'xss']
@@ -142,6 +160,7 @@ def build_evidence_document(events):
 Generated: {datetime.utcnow().strftime('%Y-%m-%d %H:%M')} UTC
 Source: CyberSense AI Detection Engine (ModSecurity WAF + AI gate)
 Period: Last 24 hours
+Note: every event below was blocked or flagged by one of the two layers (WAF or AI models).
 
 SUMMARY
 Total threats detected: {len(events)}
@@ -158,12 +177,12 @@ SQL INJECTION ATTACKS ({len(sqli)} detected)
 {detection_breakdown(sqli, rules.get('sqli', {}))}
 
 Cyber Essentials implications:
-- CE Control 1 (Boundary Firewalls): SQL injection reaching the API
-  layer indicates insufficient input filtering at the boundary. FAIL.
-- CE Control 3 (User Access Control): SQLi attempts suggest database
-  accounts may have excessive privileges. FAIL.
-- CE Control 2 (Secure Configuration): Raw SQL queries accepted suggests
-  application configuration gaps. WARN.
+{boundary_line("SQL injection", sqli)}
+- CE Control 3 (User Access Control): the application is being targeted with
+  SQL injection. Confirm the database account used by the app has least
+  privilege (no admin rights, access only to the tables it needs). WARN.
+- CE Control 2 (Secure Configuration): confirm the application uses
+  parameterised queries so injection would fail even if both layers missed it. WARN.
 """
 
     if xss:
@@ -172,12 +191,12 @@ CROSS-SITE SCRIPTING ATTACKS ({len(xss)} detected)
 {detection_breakdown(xss, rules.get('xss', {}))}
 
 Cyber Essentials implications:
-- CE Control 1 (Boundary Firewalls): XSS payloads reaching the application
-  suggest WAF or input sanitisation gaps. FAIL.
-- CE Control 2 (Secure Configuration): XSS success indicates output
-  encoding is not applied in application config. FAIL.
-- CE Control 4 (Malware Protection): Script injection can be used to
-  load malicious scripts in user browsers. WARN.
+{boundary_line("XSS", xss)}
+- CE Control 2 (Secure Configuration): the application is being targeted with
+  script injection. Confirm output encoding and a Content Security Policy are
+  applied so payloads would not execute even if both layers missed them. WARN.
+- CE Control 4 (Malware Protection): script injection can be used to load
+  malicious scripts in user browsers. Confirm CSP restricts script sources. WARN.
 """
     return doc
 
