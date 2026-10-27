@@ -24,6 +24,7 @@ services:
       - SQLI_URL=http://sql-api:5000/predict_sql
       - XSS_URL=http://xss-api:5000/predict
       - GATE_FAIL_MODE=closed
+      - RECORD_TOKEN=${RECORD_TOKEN}
     healthcheck:
       test: ["CMD-SHELL", "curl -f http://localhost:8000/gate/health || exit 1"]
       interval: 15s
@@ -51,6 +52,11 @@ services:
       - PROXY=1
       - MODSEC_RULE_ENGINE=On
       - PARANOIA=1
+      # Write the JSON audit log to a file on the shared waf-logs volume
+      # (default is /dev/stdout) so the waf-logger service can read it
+      - MODSEC_AUDIT_LOG=/var/log/modsecurity/audit.log
+    volumes:
+      - waf-logs:/var/log/modsecurity
     depends_on:
       ai-gate:
         condition: service_healthy
@@ -64,6 +70,8 @@ services:
     container_name: xss-api
     ports:
       - "5000:5000"
+    environment:
+      - RECORD_TOKEN=${RECORD_TOKEN}
     volumes:
       - event-data:/data
     healthcheck:
@@ -81,6 +89,8 @@ services:
     container_name: sql-api
     ports:
       - "5001:5000"
+    environment:
+      - RECORD_TOKEN=${RECORD_TOKEN}
     volumes:
       - event-data:/data
     healthcheck:
@@ -125,9 +135,30 @@ services:
     networks:
       - security-net
 
+  waf-logger:
+    build:
+      context: .
+      dockerfile: waf-logger/Dockerfile
+    container_name: waf-logger
+    restart: unless-stopped
+    environment:
+      - AUDIT_LOG=/waf-logs/audit.log
+      - DB_PATH=/data/events.db
+    volumes:
+      - waf-logs:/waf-logs:ro
+      - event-data:/data
+    depends_on:
+      sql-api:
+        condition: service_healthy
+      xss-api:
+        condition: service_healthy
+    networks:
+      - security-net
+
 networks:
   security-net:
     driver: bridge
 
 volumes:
   event-data:
+  waf-logs:

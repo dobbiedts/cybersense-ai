@@ -88,15 +88,59 @@ def get_recent_threats(hours=24):
     return [dict(zip(keys, r)) for r in rows]
 
 
+# --- WAF (ModSecurity) events, written by the waf-logger service ---
+def is_waf(event):
+    return event['ml_verdict'] == 'waf'
+
+
+def waf_rule_counts(hours=24):
+    """{attack_type: {rule_id: count}} for ModSecurity blocks in the window."""
+    since = (datetime.utcnow() - timedelta(hours=hours)).isoformat() + "Z"
+    conn = db()
+    try:
+        rows = conn.execute('SELECT attack_type, rule_ids FROM waf_events WHERE timestamp > ?',
+                            (since,)).fetchall()
+    except sqlite3.OperationalError:
+        rows = []
+    conn.close()
+    counts = {}
+    for attack, rule_ids in rows:
+        for rule in (rule_ids or "").split(","):
+            if rule:
+                counts.setdefault(attack, {})
+                counts[attack][rule] = counts[attack].get(rule, 0) + 1
+    return counts
+
+
+def detection_breakdown(events, rule_counts):
+    """Lines describing which layer stopped these events."""
+    waf = [e for e in events if is_waf(e)]
+    ai  = [e for e in events if not is_waf(e)]
+    lines = [f"Blocked by WAF signatures (ModSecurity): {len(waf)}",
+             f"Detected by AI models (ML/DL): {len(ai)}"]
+    if ai:
+        both = sum(1 for e in ai if e['ml_verdict'] == 'threat' and e['dl_verdict'] == 'threat')
+        lines += [f"Both ML and DL models confirmed: {both}",
+                  f"Highest ML confidence: {max(e['ml_confidence'] or 0 for e in ai):.2%}",
+                  f"Highest DL confidence: {max(e['dl_confidence'] or 0 for e in ai):.2%}"]
+    if rule_counts:
+        top = sorted(rule_counts.items(), key=lambda kv: -kv[1])[:5]
+        lines.append("Top WAF rules triggered: " + ", ".join(f"{r} ({n})" for r, n in top))
+    return "\n".join(lines)
+
+
 # --- Build evidence document ---
 def build_evidence_document(events):
     sqli = [e for e in events if e['attack_type'] == 'sqli']
     xss  = [e for e in events if e['attack_type'] == 'xss']
     high = [e for e in events if e['severity'] in ('high', 'critical')]
+    waf  = [e for e in events if is_waf(e)]
+    rules = waf_rule_counts(hours=24)
 
+    # The summary line formats are parsed by the compliance engine: keep them unchanged.
     doc = f"""AUTOMATED THREAT DETECTION EVIDENCE REPORT
 Generated: {datetime.utcnow().strftime('%Y-%m-%d %H:%M')} UTC
-Source: CyberSense AI Detection Engine
+Source: CyberSense AI Detection Engine (ModSecurity WAF + AI gate)
 Period: Last 24 hours
 
 SUMMARY
@@ -104,15 +148,14 @@ Total threats detected: {len(events)}
 SQL Injection attempts: {len(sqli)}
 XSS attempts: {len(xss)}
 High severity events: {len(high)}
+Blocked by WAF signatures (ModSecurity): {len(waf)}
+Detected by AI models (ML/DL): {len(events) - len(waf)}
 """
 
     if sqli:
-        both = sum(1 for e in sqli if e['ml_verdict'] == 'threat' and e['dl_verdict'] == 'threat')
         doc += f"""
 SQL INJECTION ATTACKS ({len(sqli)} detected)
-Both ML and DL models confirmed: {both}
-Highest ML confidence: {max(e['ml_confidence'] for e in sqli):.2%}
-Highest DL confidence: {max(e['dl_confidence'] for e in sqli):.2%}
+{detection_breakdown(sqli, rules.get('sqli', {}))}
 
 Cyber Essentials implications:
 - CE Control 1 (Boundary Firewalls): SQL injection reaching the API
@@ -124,12 +167,9 @@ Cyber Essentials implications:
 """
 
     if xss:
-        both = sum(1 for e in xss if e['ml_verdict'] == 'threat' and e['dl_verdict'] == 'threat')
         doc += f"""
 CROSS-SITE SCRIPTING ATTACKS ({len(xss)} detected)
-Both ML and DL models confirmed: {both}
-Highest ML confidence: {max(e['ml_confidence'] for e in xss):.2%}
-Highest DL confidence: {max(e['dl_confidence'] for e in xss):.2%}
+{detection_breakdown(xss, rules.get('xss', {}))}
 
 Cyber Essentials implications:
 - CE Control 1 (Boundary Firewalls): XSS payloads reaching the application
@@ -290,7 +330,35 @@ def view_events():
     conn.close()
     keys = ["timestamp", "attack_type", "ml_verdict", "dl_verdict", "final_verdict", "severity"]
     events = [dict(zip(keys, r)) for r in rows]
+    for e in events:
+        e["source"] = "waf" if e["ml_verdict"] == "waf" else "ai"
     return jsonify({"total": len(events), "events": events}), 200
+
+
+@app.route('/api/waf-events', methods=['GET'])
+def view_waf_events():
+    conn = db()
+    try:
+        rows = conn.execute('''
+            SELECT timestamp, attack_type, rule_ids, messages, method, uri
+            FROM waf_events ORDER BY timestamp DESC LIMIT 50
+        ''').fetchall()
+    except sqlite3.OperationalError:
+        rows = []
+    conn.close()
+    items = [{"timestamp": t, "attack_type": a, "rule_ids": (r or "").split(","),
+              "messages": json.loads(m) if m else [], "method": meth, "uri": u}
+             for t, a, r, m, meth, u in rows]
+    return jsonify({"total": len(items), "waf_events": items}), 200
+
+
+@app.route('/api/evidence-preview', methods=['GET'])
+def evidence_preview():
+    """The evidence report the next assessment would send, without sending it."""
+    events = get_recent_threats(hours=24)
+    if not events:
+        return jsonify({"status": "no_threats", "events": 0}), 200
+    return jsonify({"events": len(events), "evidence": build_evidence_document(events)}), 200
 
 
 @app.route('/api/ce-scores', methods=['GET'])
